@@ -1,0 +1,54 @@
+# ================================
+# PneumoScan AI — .gitignore
+# ================================
+
+# Environment variables (API keys — NEVER upload!)
+.env
+.env.local
+.env.production
+
+# Virtual environment
+venv/
+.venv/
+env/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Model files (too large for GitHub)
+*.h5
+*.pt
+*.pth
+*.pkl
+*.onnx
+
+git add .
+git commit -m "Use fresh throwaway client for all Auth Admin calls to eliminate session pollution"
+git push
+
+git add requirements.txt
+git commit -m "Fix tensorflow version for deployment"
+git push
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# OS generated files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE files
+.vscode/
+.idea/
+
+# Logs
+*.log
+logs/
+
+# Upload folder (local test images)
+uploads/
+temp/
