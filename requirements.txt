@@ -14,3 +14,4 @@ reportlab==4.2.5
 stripe==11.1.1
 agora-token-builder==1.0.0
 email-validator
+firebase-admin==6.5.0
