@@ -25,6 +25,7 @@ from pydantic import BaseModel
 
 from app.utils.supabase_client import supabase
 from app.utils.auth import get_current_user_id
+from app.utils.push_notifications import notify_user
 
 router = APIRouter(tags=["consultations"])
 
@@ -409,7 +410,12 @@ def reschedule_booking(
         update_data["reschedule_reason"] = payload.reason
 
     supabase.table("consultation_bookings").update(update_data).eq("id", booking_id).execute()
-
+    notify_user(
+        booking["patient_id"],
+        title="Consultation Rescheduled",
+        body=f"Your consultation has been moved to {new_scheduled_date.isoformat()} at {payload.slot_time}." + (f" Reason: {payload.reason}" if payload.reason else ""),
+        data={"booking_id": booking_id, "type": "rescheduled"},
+    )
     return {
         "message": "Appointment rescheduled.",
         "booking_id": booking_id,
@@ -552,6 +558,13 @@ def confirm_booking_payment(booking_id: str, user_id: str = Depends(get_current_
         raise HTTPException(status_code=400, detail=f"Payment not completed yet (status: {intent.status}).")
 
     supabase.table("consultation_bookings").update({"status": "confirmed"}).eq("id", booking_id).execute()
+
+    notify_user(
+        booking["doctor_id"],
+        title="New Consultation Booked",
+        body=f"A patient has booked a {booking['consultation_type']} consultation with you on {booking['scheduled_date']} at {booking['scheduled_time']}.",
+        data={"booking_id": booking_id, "type": "booking_confirmed"},
+    )
 
     return {"message": "Booking confirmed.", "booking_id": booking_id, "status": "confirmed"}
 @router.get("/doctor/appointments/{booking_id}")
