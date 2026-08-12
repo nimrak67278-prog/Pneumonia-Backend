@@ -302,19 +302,28 @@ def list_patient_appointments(
 def cancel_booking(booking_id: str, user_id: str = Depends(get_current_user_id)):
     response = (
         supabase.table("consultation_bookings")
-        .select("status")
+        .select("*")
         .eq("id", booking_id)
         .eq("patient_id", user_id)
         .execute()
     )
     if not response.data:
         raise HTTPException(status_code=404, detail="Booking not found.")
-    if response.data[0]["status"] not in ("pending_payment", "confirmed"):
+
+    booking = response.data[0]
+    if booking["status"] not in ("pending_payment", "confirmed"):
         raise HTTPException(status_code=400, detail="This booking can no longer be cancelled.")
 
     supabase.table("consultation_bookings").update({"status": "cancelled"}).eq("id", booking_id).execute()
-    return {"message": "Booking cancelled.", "booking_id": booking_id}
 
+    notify_user(
+        booking["doctor_id"],
+        title="Consultation Cancelled",
+        body=f"A patient has cancelled their {booking['consultation_type']} consultation scheduled for {booking['scheduled_date']} at {booking['scheduled_time']}.",
+        data={"booking_id": booking_id, "type": "cancelled"},
+    )
+
+    return {"message": "Booking cancelled.", "booking_id": booking_id}
 
 @router.get("/doctor/appointments")
 def list_doctor_appointments(
