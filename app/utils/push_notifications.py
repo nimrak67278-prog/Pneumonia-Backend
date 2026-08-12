@@ -69,13 +69,25 @@ def send_push_notification(
 
 def notify_user(user_id: str, title: str, body: str, data: dict | None = None):
     """
-    Looks up ALL of a user's registered device tokens (they may be
-    logged in on more than one device) and sends the notification to
-    each. Silently does nothing if the user has no registered tokens.
+    Saves a persistent notification record (so unread counts/badges work
+    even if the push is missed), then sends the actual push to every
+    device this user has registered.
     """
     from app.utils.supabase_client import supabase
 
-    response = supabase.table("device_tokens").select("token").eq("user_id", user_id).execute()
+    try:
+        supabase.table("notifications").insert(
+            {
+                "user_id": user_id,
+                "title": title,
+                "body": body,
+                "type": (data or {}).get("type"),
+                "booking_id": (data or {}).get("booking_id"),
+            }
+        ).execute()
+    except Exception as e:
+        logger.warning(f"Failed to save notification record: {e}")
 
+    response = supabase.table("device_tokens").select("token").eq("user_id", user_id).execute()
     for row in response.data:
         send_push_notification(row["token"], title, body, data)
