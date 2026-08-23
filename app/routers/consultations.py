@@ -606,3 +606,83 @@ def get_appointment_detail(booking_id: str, user_id: str = Depends(get_current_u
     appointment["latest_xray_report"] = latest_predictions  # null if patient never uploaded one
 
     return appointment
+class ReviewRequest(BaseModel):
+    rating: int  # 1-5
+
+
+class ReportRequest(BaseModel):
+    reason: str
+    details: Optional[str] = None
+
+
+def _get_booking_and_other_party(booking_id: str, user_id: str) -> tuple[dict, str]:
+    """Confirms the requester is part of this COMPLETED booking, and
+    returns (booking, other_party_user_id)."""
+    response = supabase.table("consultation_bookings").select("*").eq("id", booking_id).execute()
+    if not response.data:
+        raise HTTPException(status_code=404, detail="Booking not found.")
+
+    booking = response.data[0]
+
+    if user_id not in (booking["patient_id"], booking["doctor_id"]):
+        raise HTTPException(status_code=403, detail="You are not part of this consultation.")
+
+    if booking["status"] != "completed":
+        raise HTTPException(status_code=400, detail="You can only review or report a completed consultation.")
+
+    other_party_id = booking["doctor_id"] if user_id == booking["patient_id"] else booking["patient_id"]
+    return booking, other_party_id
+
+
+@router.post("/consultations/{booking_id}/review")
+def submit_review(
+    booking_id: str,
+    payload: ReviewRequest,
+    user_id: str = Depends(get_current_user_id),
+):
+    if not (1 <= payload.rating <= 5):
+        raise HTTPException(status_code=400, detail="Rating must be between 1 and 5.")
+
+    booking, other_party_id = _get_booking_and_other_party(booking_id, user_id)
+
+    existing = (
+        supabase.table("consultation_reviews")
+        .select("id")
+        .eq("booking_id", booking_id)
+        .eq("reviewer_id", user_id)
+        .execute()
+    )
+    if existing.data:
+        raise HTTPException(status_code=409, detail="You have already reviewed this consultation.")
+
+    supabase.table("consultation_reviews").insert(
+        {
+            "booking_id": booking_id,
+            "reviewer_id": user_id,
+            "reviewee_id": other_party_id,
+            "rating": payload.rating,
+        }
+    ).execute()
+
+    return {"message": "Review submitted.", "rating": payload.rating}
+
+
+@router.post("/consultations/{booking_id}/report")
+def submit_report(
+    booking_id: str,
+    payload: ReportRequest,
+    user_id: str = Depends(get_current_user_id),
+):
+    booking, other_party_id = _get_booking_and_other_party(booking_id, user_id)
+
+    supabase.table("consultation_reports").insert(
+        {
+            "booking_id": booking_id,
+            "reporter_id": user_id,
+            "reported_user_id": other_party_id,
+            "reason": payload.reason,
+            "details": payload.details,
+        }
+    ).execute()
+
+    return {"message": "Report submitted. Thank you for letting us know."}

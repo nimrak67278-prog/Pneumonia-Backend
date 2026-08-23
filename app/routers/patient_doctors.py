@@ -15,7 +15,37 @@ from app.utils.supabase_client import supabase
 from app.utils.auth import get_current_user_id
 
 router = APIRouter(prefix="/patient/doctors", tags=["patient-doctors"])
+def _format_doctor(row: dict) -> dict:
+    user_info = row.pop("users", {}) or {}
 
+    rating_response = (
+        supabase.table("consultation_reviews")
+        .select("rating")
+        .eq("reviewee_id", row["id"])
+        .execute()
+    )
+    ratings = [r["rating"] for r in rating_response.data]
+    average_rating = round(sum(ratings) / len(ratings), 1) if ratings else None
+
+    return {
+        "id": row["id"],
+        "full_name": user_info.get("full_name"),
+        "profile_picture_url": user_info.get("profile_picture_url"),
+        "specialization": row.get("specialization"),
+        "hospital": row.get("hospital"),
+        "qualifications": row.get("qualifications"),
+        "experience_years": row.get("experience_years"),
+        "languages": row.get("languages"),
+        "about_text": row.get("about_text"),
+        "video_enabled": row.get("video_enabled"),
+        "video_fee": row.get("video_fee"),
+        "video_duration_minutes": 30,
+        "voice_enabled": row.get("voice_enabled"),
+        "voice_fee": row.get("voice_fee"),
+        "voice_duration_minutes": 15,
+        "average_rating": average_rating,
+        "review_count": len(ratings),
+    }
 
 def _format_doctor(row: dict) -> dict:
     user_info = row.pop("users", {}) or {}
