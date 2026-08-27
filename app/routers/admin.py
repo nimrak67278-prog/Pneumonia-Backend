@@ -121,3 +121,82 @@ def list_all_requests():
         .execute()
     )
     return result.data
+@router.get("/appointments")
+def list_all_appointments():
+    response = (
+        supabase.table("consultation_bookings")
+        .select(
+            "*, "
+            "doctors!inner(specialization, users!inner(full_name)), "
+            "patients!inner(users!inner(full_name))"
+        )
+        .order("scheduled_date", desc=True)
+        .execute()
+    )
+
+    results = []
+    for row in response.data:
+        doctor_info = row.pop("doctors", {}) or {}
+        doctor_user = doctor_info.pop("users", {}) or {}
+        patient_info = row.pop("patients", {}) or {}
+        patient_user = patient_info.pop("users", {}) or {}
+        results.append({
+            **row,
+            "doctor_name": doctor_user.get("full_name"),
+            "doctor_specialization": doctor_info.get("specialization"),
+            "patient_name": patient_user.get("full_name"),
+        })
+
+    return {"count": len(results), "appointments": results}
+
+
+@router.get("/reports")
+def list_all_reports():
+    response = (
+        supabase.table("consultation_reports")
+        .select(
+            "*, "
+            "reporter:users!consultation_reports_reporter_id_fkey(full_name), "
+            "reported:users!consultation_reports_reported_user_id_fkey(full_name)"
+        )
+        .order("created_at", desc=True)
+        .execute()
+    )
+
+    results = []
+    for row in response.data:
+        reporter = row.pop("reporter", {}) or {}
+        reported = row.pop("reported", {}) or {}
+        results.append({
+            **row,
+            "reporter_name": reporter.get("full_name"),
+            "reported_name": reported.get("full_name"),
+        })
+
+    return {"count": len(results), "reports": results}
+
+
+@router.get("/reviews")
+def list_all_reviews():
+    response = (
+        supabase.table("consultation_reviews")
+        .select(
+            "*, "
+            "reviewer:users!consultation_reviews_reviewer_id_fkey(full_name), "
+            "reviewee:users!consultation_reviews_reviewee_id_fkey(full_name)"
+        )
+        .order("created_at", desc=True)
+        .execute()
+    )
+
+    results = []
+    for row in response.data:
+        reviewer = row.pop("reviewer", {}) or {}
+        reviewee = row.pop("reviewee", {}) or {}
+        results.append({
+            **row,
+            "reviewer_name": reviewer.get("full_name"),
+            "reviewee_name": reviewee.get("full_name"),
+        })
+
+    return {"count": len(results), "reviews": results}
