@@ -91,3 +91,10 @@ def notify_user(user_id: str, title: str, body: str, data: dict | None = None):
     response = supabase.table("device_tokens").select("token").eq("user_id", user_id).execute()
     for row in response.data:
         send_push_notification(row["token"], title, body, data)
+def notify_all_admins(title: str, body: str, data: dict | None = None):
+    """Sends a notification to every admin account in the system."""
+    from app.utils.supabase_client import supabase
+
+    admin_response = supabase.table("users").select("id").eq("role", "admin").execute()
+    for row in admin_response.data:
+        notify_user(row["id"], title, body, data)
