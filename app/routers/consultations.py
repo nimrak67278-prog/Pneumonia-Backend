@@ -22,7 +22,7 @@ from typing import Optional
 import stripe
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-
+from app.utils.push_notifications import notify_all_admins
 from app.utils.supabase_client import supabase
 from app.utils.auth import get_current_user_id
 from app.utils.push_notifications import notify_user
@@ -684,5 +684,9 @@ def submit_report(
             "details": payload.details,
         }
     ).execute()
-
+    notify_all_admins(
+        title="New Consultation Report",
+        body=f"A report was filed: {payload.reason}",
+        data={"type": "new_report", "booking_id": booking_id},
+    )
     return {"message": "Report submitted. Thank you for letting us know."}

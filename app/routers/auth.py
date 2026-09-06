@@ -12,7 +12,7 @@ from app.utils.supabase_client import supabase, supabase_auth
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from pydantic import BaseModel, EmailStr
 from app.utils.supabase_client import supabase, supabase_auth, get_fresh_admin_client
-
+from app.utils.push_notifications import notify_all_admins
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 ALLOWED_CERT_TYPES = {"image/jpeg", "image/jpg", "image/png", "application/pdf"}
@@ -151,6 +151,11 @@ async def signup_doctor(
     except Exception as e:
         get_fresh_admin_client().auth.admin.delete_user(user_id)
         raise HTTPException(status_code=400, detail=f"Profile creation failed: {str(e)}")
+    notify_all_admins(
+        title="New Doctor Signup",
+        body=f"Dr. {full_name} has registered and is awaiting certificate verification.",
+        data={"type": "doctor_pending", "doctor_id": user_id},
+    )
 
     return {
         "message": (
