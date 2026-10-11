@@ -32,7 +32,6 @@ class PatientSignupRequest(BaseModel):
     password: str
     full_name: str
     mobile_number: str
-    code: str = Field(min_length=6, max_length=6)   # <- added    # <- added
 
 
 
