@@ -12,11 +12,14 @@ from app.utils.supabase_client import supabase, supabase_auth
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from pydantic import BaseModel, EmailStr
 from app.utils.supabase_client import supabase, supabase_auth, get_fresh_admin_client
-from app.utils.push_notifications import notify_all_admins
 from app.utils.otp import send_new_otp
 from app.utils.email_service import EmailSendError
 from pydantic import BaseModel, EmailStr, Field
 from app.utils.otp import verify_otp
+from app.utils.otp import send_new_otp
+from app.utils.email_service import EmailSendError
+from app.utils.pending import save_pending, delete_pending, purge_expired
+from app.utils.otp import delete_otp
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -37,76 +40,56 @@ class LoginRequest(BaseModel):
     email: EmailStr
     password: str
 
+EMAIL_FAIL_MSG = (
+    "Something went wrong while sending the verification code. "
+    "Please check your email address and try again."
+)
+
+
 def _ensure_email_free(email: str):
     existing = supabase.table("users").select("id").eq("email", email).limit(1).execute()
     if existing.data:
         raise HTTPException(status_code=400, detail="An account with this email already exists.")
 
+
+def _send_signup_otp_or_fail(email: str):
+    """Sends the code. If it fails, the held details are deleted at once."""
+    try:
+        result = send_new_otp(email, "signup")
+    except EmailSendError as e:
+        print(f"OTP email failed: {e}")   # real reason shows in Railway logs
+        delete_pending(email)
+        delete_otp(email, "signup")
+        raise HTTPException(status_code=502, detail=EMAIL_FAIL_MSG)
+    if result == "cooldown":
+        raise HTTPException(
+            status_code=429,
+            detail="A code was already sent. Please wait a minute before requesting another.",
+        )
 @router.post("/signup/patient")
 def signup_patient(payload: PatientSignupRequest):
     email = payload.email.lower()
 
+    purge_expired()
     _ensure_email_free(email)
-    if not verify_otp(email, "signup", payload.code):
-        raise HTTPException(status_code=400, detail="Invalid or expired code.")
 
-    # 1. Create the Supabase Auth user   (rest of your code unchanged,
-    #    but use `email` instead of `payload.email` in create_user and
-    #    in the users insert, so emails are stored lowercase)
-    # 1. Create the Supabase Auth user
-    try:
-        auth_response = get_fresh_admin_client().auth.admin.create_user(
-            {
-                "email": email,
-                "password": payload.password,
-                "email_confirm": True,
-            }
-        )
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Signup failed: {str(e)}")
-
-    user_id = auth_response.user.id
-
-    # 2. Insert the profile rows (email_verified starts False)
-    try:
-        supabase.table("users").insert(
-            {
-                "id": user_id,
-                "email": email,
-                "full_name": payload.full_name,
-                "role": "patient",
-                "email_verified": False,
-            }
-        ).execute()
-
-        supabase.table("patients").insert(
-            {
-                "id": user_id,
-                "mobile_number": payload.mobile_number,
-            }
-        ).execute()
-    except Exception as e:
-        get_fresh_admin_client().auth.admin.delete_user(user_id)
-        raise HTTPException(status_code=400, detail=f"Profile creation failed: {str(e)}")
-
-    # 3. Email the verification code
-    try:
-        send_new_otp(email, "signup")
-    except EmailSendError:
-        raise HTTPException(
-            status_code=502,
-            detail="Account created, but we couldn't send the code. Tap 'Resend code'.",
-        )
+    # Nothing is created yet: details are held until the OTP is verified
+    save_pending(
+        email,
+        "patient",
+        {"full_name": payload.full_name, "mobile_number": payload.mobile_number},
+        payload.password,
+    )
+    _send_signup_otp_or_fail(email)
 
     return {
-        "message": "Account created. Enter the code we emailed you.",
-        "user_id": user_id,
+        "message": "We sent a verification code to your email. Enter it to finish creating your account.",
+        "email": email,
         "requires_verification": True,
     }
 
 @router.post("/signup/doctor")
 async def signup_doctor(
-    code: str = Form(...),
     email: EmailStr = Form(...),
     password: str = Form(...),
     full_name: str = Form(...),
@@ -115,7 +98,9 @@ async def signup_doctor(
     license_number: str = Form(...),
     certificate: UploadFile = File(...),
 ):
-    # --- Validate the certificate file ---
+    email = email.lower()
+
+    # --- Validate the certificate file (same as before) ---
     if certificate.content_type not in ALLOWED_CERT_TYPES:
         raise HTTPException(
             status_code=400,
@@ -129,91 +114,51 @@ async def signup_doctor(
             status_code=400,
             detail=f"Certificate file too large ({size_mb:.1f} MB). Max is {MAX_CERT_SIZE_MB} MB.",
         )
-    email = email.lower()
+
+    purge_expired()
     _ensure_email_free(email)
-    if not verify_otp(email, "signup", code):
-        raise HTTPException(status_code=400, detail="Invalid or expired code.")
-    # 1. Create the Supabase Auth user
-    try:
-        auth_response = get_fresh_admin_client().auth.admin.create_user(
-            {
-                "email": email,
-                "password": password,
-                "email_confirm": True,
-            }
-        )
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Signup failed: {str(e)}")
 
-    user_id = auth_response.user.id
-
-    # 2. Upload the certificate to Storage, under a folder named by user_id
+    # Upload the certificate to a temporary "pending" folder
     file_ext = certificate.filename.split(".")[-1]
-    storage_path = f"{user_id}/certificate_{uuid.uuid4().hex}.{file_ext}"
-
+    cert_path = f"pending/{uuid.uuid4().hex}/certificate_{uuid.uuid4().hex}.{file_ext}"
     try:
         supabase.storage.from_("doctor-certificates").upload(
-            storage_path,
+            cert_path,
             cert_bytes,
             {"content-type": certificate.content_type},
         )
     except Exception as e:
-        get_fresh_admin_client().auth.admin.delete_user(user_id)
         raise HTTPException(status_code=400, detail=f"Certificate upload failed: {str(e)}")
 
-    # 3. Insert profile + doctor rows
+    # Nothing is created yet: details are held until the OTP is verified
     try:
-        supabase.table("users").insert(
+        save_pending(
+            email,
+            "doctor",
             {
-                "id": user_id,
-                "email": email,
                 "full_name": full_name,
-                "role": "doctor",
-                "email_verified": False,
-
-            }
-        ).execute()
-
-        supabase.table("doctors").insert(
-            {
-                "id": user_id,
                 "specialization": specialization,
                 "hospital": hospital,
                 "license_number": license_number,
-                "certificate_url": storage_path,
-                "verification_status": "pending",
-            }
-        ).execute()
-    except Exception as e:
-        get_fresh_admin_client().auth.admin.delete_user(user_id)
-        raise HTTPException(status_code=400, detail=f"Profile creation failed: {str(e)}")
-        # Email the verification code. Admins are notified after the doctor
-    # verifies their email (done in /auth/verify-otp).
-    try:
-        send_new_otp(email, "signup")
-    except EmailSendError:
-        raise HTTPException(
-            status_code=502,
-            detail="Account created, but we couldn't send the code. Tap 'Resend code'.",
+                "certificate_path": cert_path,
+            },
+            password,
         )
+    except Exception:
+        try:
+            supabase.storage.from_("doctor-certificates").remove([cert_path])
+        except Exception:
+            pass
+        raise HTTPException(status_code=400, detail="Something went wrong. Please try again.")
+
+    _send_signup_otp_or_fail(email)
 
     return {
-        "message": "Account created. Enter the code we emailed you. "
+        "message": "We sent a verification code to your email. Enter it to finish creating your account. "
                    "Your certificate will then be reviewed by an admin.",
-        "user_id": user_id,
-        "verification_status": "pending",
+        "email": email,
         "requires_verification": True,
     }
-
-    return {
-        "message": (
-            "Doctor account created successfully. Your certificate is "
-            "pending verification before you can accept patient requests."
-        ),
-        "user_id": user_id,
-        "verification_status": "pending",
-    }
-
 
 def _fetch_single(query):
     """Runs a Supabase query and returns the first matching row's data,
