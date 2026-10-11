@@ -16,3 +16,4 @@ agora-token-builder==1.0.0
 email-validator
 firebase-admin==6.5.0
 httpx
+cryptography
