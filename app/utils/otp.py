@@ -106,3 +106,26 @@ def send_new_otp(email: str, purpose: str) -> str:
         return "cooldown"
     send_otp_email(email.lower().strip(), code, purpose)
     return "sent"
+
+
+def otp_is_dead(email: str, purpose: str) -> bool:
+    """True if there is no usable code left: missing, expired, or out of attempts."""
+    email = email.lower().strip()
+    result = (
+        supabase.table("otp_codes")
+        .select("attempts, expires_at")
+        .eq("email", email)
+        .eq("purpose", purpose)
+        .limit(1)
+        .execute()
+    )
+    if not result.data:
+        return True
+    row = result.data[0]
+    return row["expires_at"] < int(time.time()) or row["attempts"] >= MAX_ATTEMPTS
+
+
+def delete_otp(email: str, purpose: str) -> None:
+    supabase.table("otp_codes").delete().eq("email", email.lower().strip()).eq(
+        "purpose", purpose
+    ).execute()
