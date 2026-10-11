@@ -14,6 +14,7 @@ to test uploads directly from the browser.
 
 from datetime import datetime, timezone
 
+
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -36,7 +37,7 @@ from app.routers.doctor import router as doctor_router
 from app.routers.patient_doctors import router as patient_doctors_router
 from app.routers.consultations import router as consultations_router
 from app.routers.notifications import router as notifications_router
-
+from app.routers import otp_routes
 app = FastAPI(
     title="Pneumonia Detection API",
     description="AI-powered pneumonia detection from chest X-ray images.",
@@ -52,6 +53,8 @@ app.include_router(doctor_router)
 app.include_router(patient_doctors_router)
 app.include_router(consultations_router)
 app.include_router(notifications_router)
+app.include_router(otp_routes.router)
+
 
 # Allow the React Native app (and Expo dev server) to call this API.
 # Tighten allow_origins to your actual domain/app scheme before production deployment.
