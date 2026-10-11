@@ -13,6 +13,9 @@ from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from pydantic import BaseModel, EmailStr
 from app.utils.supabase_client import supabase, supabase_auth, get_fresh_admin_client
 from app.utils.push_notifications import notify_all_admins
+from app.utils.otp import send_new_otp
+from app.utils.email_service import EmailSendError
+
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 ALLOWED_CERT_TYPES = {"image/jpeg", "image/jpg", "image/png", "application/pdf"}
@@ -34,11 +37,13 @@ class LoginRequest(BaseModel):
 
 @router.post("/signup/patient")
 def signup_patient(payload: PatientSignupRequest):
+    email = payload.email.lower()
+
     # 1. Create the Supabase Auth user
     try:
         auth_response = get_fresh_admin_client().auth.admin.create_user(
             {
-                "email": payload.email,
+                "email": email,
                 "password": payload.password,
                 "email_confirm": True,
             }
@@ -48,31 +53,42 @@ def signup_patient(payload: PatientSignupRequest):
 
     user_id = auth_response.user.id
 
-    # 2. Insert the profile row
+    # 2. Insert the profile rows (email_verified starts False)
     try:
-       supabase.table("users").insert(
+        supabase.table("users").insert(
             {
                 "id": user_id,
-                "email": payload.email,
+                "email": email,
                 "full_name": payload.full_name,
                 "role": "patient",
+                "email_verified": False,
             }
         ).execute()
 
-       supabase.table("patients").insert(       # <- added block
+        supabase.table("patients").insert(
             {
                 "id": user_id,
                 "mobile_number": payload.mobile_number,
             }
         ).execute()
     except Exception as e:
-        # Roll back the auth user if profile creation fails, so we don't
-        # end up with an orphaned auth account with no matching profile.
         get_fresh_admin_client().auth.admin.delete_user(user_id)
         raise HTTPException(status_code=400, detail=f"Profile creation failed: {str(e)}")
 
-    return {"message": "Patient account created successfully.", "user_id": user_id}
+    # 3. Email the verification code
+    try:
+        send_new_otp(email, "signup")
+    except EmailSendError:
+        raise HTTPException(
+            status_code=502,
+            detail="Account created, but we couldn't send the code. Tap 'Resend code'.",
+        )
 
+    return {
+        "message": "Account created. Enter the code we emailed you.",
+        "user_id": user_id,
+        "requires_verification": True,
+    }
 
 @router.post("/signup/doctor")
 async def signup_doctor(
@@ -98,6 +114,7 @@ async def signup_doctor(
             status_code=400,
             detail=f"Certificate file too large ({size_mb:.1f} MB). Max is {MAX_CERT_SIZE_MB} MB.",
         )
+    email = email.lower()
 
     # 1. Create the Supabase Auth user
     try:
@@ -135,6 +152,8 @@ async def signup_doctor(
                 "email": email,
                 "full_name": full_name,
                 "role": "doctor",
+                "email_verified": False,
+
             }
         ).execute()
 
@@ -151,11 +170,23 @@ async def signup_doctor(
     except Exception as e:
         get_fresh_admin_client().auth.admin.delete_user(user_id)
         raise HTTPException(status_code=400, detail=f"Profile creation failed: {str(e)}")
-    notify_all_admins(
-        title="New Doctor Signup",
-        body=f"Dr. {full_name} has registered and is awaiting certificate verification.",
-        data={"type": "doctor_pending", "doctor_id": user_id},
-    )
+        # Email the verification code. Admins are notified after the doctor
+    # verifies their email (done in /auth/verify-otp).
+    try:
+        send_new_otp(email, "signup")
+    except EmailSendError:
+        raise HTTPException(
+            status_code=502,
+            detail="Account created, but we couldn't send the code. Tap 'Resend code'.",
+        )
+
+    return {
+        "message": "Account created. Enter the code we emailed you. "
+                   "Your certificate will then be reviewed by an admin.",
+        "user_id": user_id,
+        "verification_status": "pending",
+        "requires_verification": True,
+    }
 
     return {
         "message": (
@@ -183,9 +214,7 @@ def _fetch_single(query):
 def login(payload: LoginRequest):
     try:
         
-        auth_response = supabase.auth.sign_in_with_password(
-            {"email": payload.email, "password": payload.password}
-        )
+       
         auth_response = supabase_auth.auth.sign_in_with_password(
             {"email": payload.email, "password": payload.password}
         )
@@ -200,6 +229,11 @@ def login(payload: LoginRequest):
         raise HTTPException(
             status_code=404,
             detail="No profile found for this account. Please contact support.",
+        )
+    if profile_data.get("email_verified") is False:
+        raise HTTPException(
+            status_code=403,
+            detail="EMAIL_NOT_VERIFIED",
         )
 
     result = {
