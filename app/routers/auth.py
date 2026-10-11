@@ -15,6 +15,8 @@ from app.utils.supabase_client import supabase, supabase_auth, get_fresh_admin_c
 from app.utils.push_notifications import notify_all_admins
 from app.utils.otp import send_new_otp
 from app.utils.email_service import EmailSendError
+from pydantic import BaseModel, EmailStr, Field
+from app.utils.otp import verify_otp
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -26,7 +28,8 @@ class PatientSignupRequest(BaseModel):
     email: EmailStr
     password: str
     full_name: str
-    mobile_number: str          # <- added
+    mobile_number: str
+    code: str = Field(min_length=6, max_length=6)   # <- added    # <- added
 
 
 
@@ -34,11 +37,22 @@ class LoginRequest(BaseModel):
     email: EmailStr
     password: str
 
+def _ensure_email_free(email: str):
+    existing = supabase.table("users").select("id").eq("email", email).limit(1).execute()
+    if existing.data:
+        raise HTTPException(status_code=400, detail="An account with this email already exists.")
 
 @router.post("/signup/patient")
 def signup_patient(payload: PatientSignupRequest):
     email = payload.email.lower()
 
+    _ensure_email_free(email)
+    if not verify_otp(email, "signup", payload.code):
+        raise HTTPException(status_code=400, detail="Invalid or expired code.")
+
+    # 1. Create the Supabase Auth user   (rest of your code unchanged,
+    #    but use `email` instead of `payload.email` in create_user and
+    #    in the users insert, so emails are stored lowercase)
     # 1. Create the Supabase Auth user
     try:
         auth_response = get_fresh_admin_client().auth.admin.create_user(
@@ -92,6 +106,7 @@ def signup_patient(payload: PatientSignupRequest):
 
 @router.post("/signup/doctor")
 async def signup_doctor(
+    code: str = Form(...),
     email: EmailStr = Form(...),
     password: str = Form(...),
     full_name: str = Form(...),
@@ -115,7 +130,9 @@ async def signup_doctor(
             detail=f"Certificate file too large ({size_mb:.1f} MB). Max is {MAX_CERT_SIZE_MB} MB.",
         )
     email = email.lower()
-
+    _ensure_email_free(email)
+    if not verify_otp(email, "signup", code):
+        raise HTTPException(status_code=400, detail="Invalid or expired code.")
     # 1. Create the Supabase Auth user
     try:
         auth_response = get_fresh_admin_client().auth.admin.create_user(
