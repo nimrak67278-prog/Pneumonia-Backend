@@ -168,4 +168,5 @@ async def predict(
         "recommendation": recommendation,
         "disclaimer": DISCLAIMER,
         "timestamp": datetime.now(timezone.utc).isoformat(),
+        "heatmap_base64": result["heatmap_base64"],
     }
