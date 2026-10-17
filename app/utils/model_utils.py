@@ -23,7 +23,7 @@ from app.utils.gradcam import grad_cam, overlay_heatmap, image_to_base64_png
 # ---------------------------------------------------------------
 # Upload the slim .pth to Google Drive (share: "Anyone with the link"),
 # paste its file ID here. Same approach as your old .keras model.
-DRIVE_FILE_ID = "/1TtWC_cCMPjl5Y4L9t3F3Lm-2btpnS_Wx/"
+DRIVE_FILE_ID = "1TtWC_cCMPjl5Y4L9t3F3Lm-2btpnS_Wx"
 MODEL_PATH = "app/model/densenet121_pneumonia.pth"
 THRESHOLD = 0.50                 # same as the notebook test results
 LABEL_PNEUMONIA = "PNEUMONIA"    # explanation.py compares against these exact strings
