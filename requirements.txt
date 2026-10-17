@@ -17,3 +17,6 @@ email-validator
 firebase-admin==6.5.0
 httpx
 cryptography
+   --extra-index-url https://download.pytorch.org/whl/cpu
+torch
+torchvision
