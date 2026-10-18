@@ -62,8 +62,16 @@ def _load_model():
     return model
 
 
+# Railway reports the HOST's CPU count, so PyTorch can start far too many threads
+# and slow itself down. Set this to your plan's vCPUs (try 2, then 4).
+torch.set_num_threads(int(os.getenv("TORCH_THREADS", "2")))
+
 # Loaded once when the server starts, not on every request
 _model = _load_model()
+
+# Warm-up: the first forward pass is slow (memory setup); do it at startup
+with torch.inference_mode():
+    _model(torch.zeros(1, 3, 224, 224, device=DEVICE))
 
 
 def predict_pneumonia(image_bytes: bytes) -> dict:
@@ -77,7 +85,10 @@ def predict_pneumonia(image_bytes: bytes) -> dict:
     label = LABEL_PNEUMONIA if is_pneumonia else LABEL_NORMAL
     confidence = (prob if is_pneumonia else 1.0 - prob) * 100   # 0-100, as before
 
-    heatmap_b64 = image_to_base64_png(overlay_heatmap(image, cam))
+    # Heatmap only for PNEUMONIA results (a map on a NORMAL result would mislead)
+    heatmap_b64 = (
+        image_to_base64_png(overlay_heatmap(image, cam)) if is_pneumonia else None
+    )
 
     return {
         "label": label,
