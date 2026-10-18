@@ -14,7 +14,8 @@ to test uploads directly from the browser.
 
 from datetime import datetime, timezone
 
-
+import base64
+import uuid
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -136,11 +137,26 @@ async def predict(
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to save X-ray image: {str(e)}")
-
+    # --- Upload the Grad-CAM heatmap (only exists for PNEUMONIA results) ---
+    heatmap_path = None
+    print(f"[heatmap] label={result['label']} has_heatmap={bool(result.get('heatmap_base64'))}")
+    if result.get("heatmap_base64"):
+        heatmap_path = f"{user_id}/heatmap_{uuid.uuid4().hex}.png"
+        try:
+            supabase.storage.from_("xray-images").upload(
+                heatmap_path,
+                base64.b64decode(result["heatmap_base64"]),
+                {"content-type": "image/png"},
+            )
+            print(f"[heatmap] uploaded to {heatmap_path}")
+        except Exception as e:
+            print(f"[heatmap] upload failed: {e}")
+            heatmap_path = None
     # --- Save the prediction record to the database ---
     try:
         insert_response = (
             supabase.table("predictions")
+            
             .insert(
                 {
                     "patient_id": user_id,
@@ -150,6 +166,7 @@ async def predict(
                     "risk_level": risk_level,
                     "explanation": explanation,
                     "recommendation": recommendation,
+                    "heatmap_path": heatmap_path,
                 }
             )
             .execute()
@@ -168,5 +185,4 @@ async def predict(
         "recommendation": recommendation,
         "disclaimer": DISCLAIMER,
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "heatmap_base64": result["heatmap_base64"],
-    }
+        "heatmap_base64": result.get("heatmap_base64")    }
