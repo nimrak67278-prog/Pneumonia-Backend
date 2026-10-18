@@ -71,7 +71,45 @@ def get_xray_image_url(prediction_id: str, user_id: str = Depends(get_current_us
 
     return {"url": signed.get("signedURL") or signed.get("signedUrl")}
 
+def _can_view_prediction(user_id: str, prediction: dict) -> bool:
+    """The patient who owns it, or a doctor with a booking with that patient."""
+    if prediction["patient_id"] == user_id:
+        return True
+    booking = (
+        supabase.table("consultation_bookings")
+        .select("id")
+        .eq("doctor_id", user_id)
+        .eq("patient_id", prediction["patient_id"])
+        .limit(1)
+        .execute()
+    )
+    return bool(booking.data)
 
+
+@router.get("/{prediction_id}/heatmap-url")
+def get_xray_heatmap_url(prediction_id: str, user_id: str = Depends(get_current_user_id)):
+    record_response = (
+        supabase.table("predictions")
+        .select("patient_id, heatmap_path")
+        .eq("id", prediction_id)
+        .execute()
+    )
+
+    if not record_response.data or not _can_view_prediction(user_id, record_response.data[0]):
+        raise HTTPException(status_code=404, detail="X-ray not found.")
+
+    heatmap_path = record_response.data[0].get("heatmap_path")
+    if not heatmap_path:
+        return {"url": None}  # NORMAL results and old records have no heatmap
+
+    try:
+        signed = supabase.storage.from_("xray-images").create_signed_url(
+            heatmap_path, expires_in=300
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to generate heatmap URL: {str(e)}")
+
+    return {"url": signed.get("signedURL") or signed.get("signedUrl")}
 @router.delete("/{prediction_id}")
 def delete_xray(prediction_id: str, user_id: str = Depends(get_current_user_id)):
     record_response = (
@@ -127,8 +165,14 @@ def download_report(prediction_id: str, user_id: str = Depends(get_current_user_
     except Exception:
         pass
 
-    pdf_bytes = generate_xray_report_pdf(record, image_bytes)
+    heatmap_bytes = None
+    if record.get("heatmap_path"):
+        try:
+            heatmap_bytes = supabase.storage.from_("xray-images").download(record["heatmap_path"])
+        except Exception:
+            pass  # report still works without it
 
+    pdf_bytes = generate_xray_report_pdf(record, image_bytes, heatmap_bytes)
     filename = f"pneumoscan_report_{prediction_id[:8]}.pdf"
 
     return StreamingResponse(
